@@ -75,7 +75,7 @@ export default function Home() {
   );
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen pb-28 gap-8 p-4 font-[family-name:var(--font-geist-sans)]">
+    <div className="flex flex-col items-center min-h-screen pb-28 gap-8 p-4 font-[family-name:var(--font-geist-sans)]">
       <Analytics />
       <div className="absolute top-4 right-8">
         {!isSignedIn ? (
@@ -88,13 +88,13 @@ export default function Home() {
           </SignedIn>
         )}
       </div>
-      <div className="flex gap-2 items-center flex-col lg:flex-row">
-        <div className="bg-white p-4">
+      <div className="flex gap-2 items-start flex-row w-full max-w-6xl mt-12">
+        <div className="bg-white p-4 flex-1">
           <div className="relative">
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
-              className="w-[600px] h-[400px] p-4 pb-12 border border-solid border-gray-600 rounded-lg focus:outline-none resize-none focus:ring-2 focus:ring-[#333] focus:border-transparent"
+              className="w-full h-[500px] p-4 pb-12 border border-solid border-gray-600 rounded-lg focus:outline-none resize-none focus:ring-2 focus:ring-[#333] focus:border-transparent overflow-y-auto"
               placeholder="Paste your AI-generated text here"
             ></textarea>
             <div className="absolute bottom-4 left-4 bg-foreground px-2 py-1 rounded-md text-sm text-gray-100 shadow">
@@ -111,12 +111,12 @@ export default function Home() {
             </button>
           </div>
         </div>
-        <div className="bg-white p-4">
+        <div className="bg-white p-4 flex-1">
           <div className="relative">
             <textarea
               disabled={true}
               value={humanizedText}
-              className="bg-white p-4 w-[600px] h-[400px] border border-solid border-gray-600 rounded-lg focus:outline-none outline-none resize-none focus:ring-2 focus:ring-[#333] focus:border-transparent"
+              className="bg-white p-4 w-full h-[500px] border border-solid border-gray-600 rounded-lg focus:outline-none outline-none resize-none overflow-y-auto"
               placeholder="Humanized text will appear here"
             ></textarea>
             <button

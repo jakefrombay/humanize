@@ -23,9 +23,10 @@ export async function POST(request: Request) {
                 messages: [
                     { role: "system", content: systemPrompt },
                     ...writingSamples,
-                    { role: "user", content: aiText },
+                    { role: "user", content: `Rewrite the following text to sound natural and human:\n\n${aiText}` },
                 ],
-                max_tokens: 512,
+                max_tokens: 1024,
+                temperature: 0.9,
             }),
         });
 
