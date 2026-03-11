@@ -3,7 +3,9 @@ import { systemPrompt } from './utils/instr';
 import { writingSamples } from './utils/samples';
 import { criticExamples } from './utils/criticSamples';
 
-const apiKey = process.env.AIML_API_KEY;
+const apiKey = process.env.OPENAI_API_KEY;
+const HUMANIZER_MODEL = "gpt-5.2";
+const CRITIC_MODEL = "gpt-5.3-chat-latest";
 const TARGET_SCORE = 15;
 
 const criticSystemPrompt = `You are an AI text detection expert. Score the text using the rubric below. Each signal has a maximum penalty. Add up the penalties to get the total score (0 = fully human, 100 = fully AI).
@@ -316,25 +318,26 @@ Now score the text below using ALL 15 criteria (including S14 TECHNICAL LANGUAGE
 
 async function callLLM(
     messages: Array<{ role: string; content: string }>,
-    temperature = 0.9,
-    maxTokens = 4096
+    maxTokens = 4096,
+    model = HUMANIZER_MODEL
 ): Promise<string> {
-    const response = await fetch("https://api.aimlapi.com/chat/completions", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
         },
         body: JSON.stringify({
-            model: "gpt-5.3",
+            model,
             messages,
-            max_tokens: maxTokens,
-            temperature,
+            max_completion_tokens: maxTokens,
         }),
     });
 
     if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const errBody = await response.text();
+        console.error(`[API ERROR] ${response.status} — model=${model} — ${errBody}`);
+        throw new Error(`API error: ${response.status} — ${errBody}`);
     }
 
     const data = await response.json();
@@ -378,15 +381,12 @@ async function humanize(text: string, k: number, feedback?: string, breakthrough
     }
 
     // Use higher temperature for breakthrough attempts to force more variation
-    const temperature = breakthrough ? 1.1 : 0.9;
-
     return callLLM(
         [
             { role: "system", content: systemPrompt },
             ...writingSamples,
             { role: "user", content: userContent },
-        ],
-        temperature
+        ]
     );
 }
 
@@ -402,8 +402,8 @@ async function detectAI(text: string): Promise<{ score: number; feedback: string
             ...criticExamples,
             { role: "user", content: userMessage },
         ],
-        0.2,
-        1024
+        1024,
+        CRITIC_MODEL
     );
 
     const cleaned = result.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
