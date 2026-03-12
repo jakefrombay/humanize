@@ -8,10 +8,14 @@ import './pages.css';
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
+  const [criticLoading, setCriticLoading] = useState(false);
   const [wordCount, setWordCount] = useState(0);
   const [text, setText] = useState('');
   const [humanizedText, setHumanizedText] = useState('');
   const [toggleCopy, setToggleCopy] = useState(false);
+  const [temperature, setTemperature] = useState(1.0);
+  const [kIterations, setKIterations] = useState(3);
+  const [score, setScore] = useState<number | null>(null);
   const { isSignedIn } = useUser();
 
   useEffect(() => {
@@ -19,45 +23,42 @@ export default function Home() {
     setWordCount(text.trim() === '' ? 0 : words.length);
   }, [text]);
 
-  const humanaizeAiText = async (aiText: string) => {
-    console.log('Sending POST request /api/humanaize');
-    try {
-      const response = await fetch('/api/humanaize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ aiText }),
-      });
-
-      if (!response.ok) {
-        throw new Error('API request failed');
-      }
-
-      const data = await response.json();
-      return data.message;
-    } catch (error) {
-      console.error('Error:', error);
-      alert('An error occurred while fetching the reply.');
-      return 'No response available';
-    } finally {
-      console.log('POST request /api/humanaize completed');
-    }
+  const callApi = async (body: object) => {
+    const response = await fetch('/api/humanaize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error('API request failed');
+    return response.json();
   };
 
   const handleHumanize = () => {
-    console.log('Humanizing...');
+    if (!text.trim()) return;
     setLoading(true);
-    humanaizeAiText(text)
-      .then((humanized) => {
-        setHumanizedText(humanized);
+    setScore(null);
+    callApi({ mode: 'humanize', aiText: text, temperature })
+      .then((data) => setHumanizedText(data.message))
+      .catch((err) => {
+        console.error('Error:', err);
+        alert('An error occurred while humanizing.');
       })
-      .catch((error) => {
-        console.error('Error:', error);
+      .finally(() => setLoading(false));
+  };
+
+  const handleCriticize = () => {
+    if (!humanizedText.trim()) return;
+    setCriticLoading(true);
+    callApi({ mode: 'refine', humanizedText, kIterations })
+      .then((data) => {
+        setHumanizedText(data.message);
+        setScore(data.score ?? null);
       })
-      .finally(() => {
-        setLoading(false);
-      });
+      .catch((err) => {
+        console.error('Error:', err);
+        alert('An error occurred while refining.');
+      })
+      .finally(() => setCriticLoading(false));
   };
 
   const loader = () => (
@@ -74,8 +75,10 @@ export default function Home() {
     </svg>
   );
 
+  const busy = loading || criticLoading;
+
   return (
-    <div className="flex flex-col items-center min-h-screen pb-28 gap-8 p-4 font-[family-name:var(--font-geist-sans)]">
+    <div className="flex flex-col items-center min-h-screen pb-28 gap-6 p-4 font-[family-name:var(--font-geist-sans)]">
       <Analytics />
       <div className="absolute top-4 right-8">
         {!isSignedIn ? (
@@ -88,49 +91,69 @@ export default function Home() {
           </SignedIn>
         )}
       </div>
+
+      {/* ── Main panels ── */}
       <div className="flex gap-2 items-start flex-row w-full max-w-6xl mt-12">
-        <div className="bg-white p-4 flex-1">
+
+        {/* Left: input */}
+        <div className="flex flex-col flex-1 gap-2">
           <div className="relative">
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               className="w-full h-[500px] p-4 pb-12 border border-solid border-gray-600 rounded-lg focus:outline-none resize-none focus:ring-2 focus:ring-[#333] focus:border-transparent overflow-y-auto"
               placeholder="Paste your AI-generated text here"
-            ></textarea>
+            />
             <div className="absolute bottom-4 left-4 bg-foreground px-2 py-1 rounded-md text-sm text-gray-100 shadow">
               {wordCount} words
             </div>
             <button
               className={`absolute bottom-4 right-4 rounded-md shadow border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-gray-100 gap-2 hover:bg-[#aeaeae] dark:hover:bg-[#aeaeae] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5
-                ${loading ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
+                ${(busy || !text.trim()) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
               `}
               onClick={handleHumanize}
-              disabled={loading}
+              disabled={busy || !text.trim()}
             >
               {loading ? loader() : 'Humanize'}
             </button>
           </div>
+
+          {/* Temperature control */}
+          <div className="border border-gray-300 rounded-lg px-4 py-3 flex items-center gap-4">
+            <span className="text-sm font-medium text-gray-600 whitespace-nowrap">temp:</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.1}
+              value={temperature}
+              onChange={(e) => setTemperature(parseFloat(e.target.value))}
+              className="flex-1 accent-gray-800"
+              disabled={busy}
+            />
+            <span className="text-sm font-mono text-gray-700 w-8 text-right">{temperature.toFixed(1)}</span>
+          </div>
         </div>
-        <div className="bg-white p-4 flex-1">
+
+        {/* Right: output */}
+        <div className="flex flex-col flex-1 gap-2">
           <div className="relative">
             <textarea
               disabled={true}
               value={humanizedText}
               className="bg-white p-4 w-full h-[500px] border border-solid border-gray-600 rounded-lg focus:outline-none outline-none resize-none overflow-y-auto"
               placeholder="Humanized text will appear here"
-            ></textarea>
+            />
             <button
-              disabled={(!loading && humanizedText.length > 0) ? false : true}
+              disabled={busy || humanizedText.length < 1}
               className={`absolute bottom-4 right-4 flex flex-row gap-1 items-center bg-foreground px-2 py-1 rounded-md text-sm text-gray-100 shadow
-                ${(loading || humanizedText.length < 1) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
+                ${(busy || humanizedText.length < 1) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
               `}
               onClick={() => {
-                if (!loading && humanizedText.length > 0) {
+                if (!busy && humanizedText.length > 0) {
                   navigator.clipboard.writeText(humanizedText);
                   setToggleCopy(true);
-                  setTimeout(() => {
-                    setToggleCopy(false);
-                  }, 1000);
+                  setTimeout(() => setToggleCopy(false), 1000);
                 }
               }}
             >
@@ -143,8 +166,37 @@ export default function Home() {
               />
               copy
             </button>
+            <button
+              className={`absolute bottom-4 left-4 rounded-md shadow border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-gray-100 gap-2 hover:bg-[#aeaeae] dark:hover:bg-[#aeaeae] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5
+                ${(busy || !humanizedText.trim()) ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}
+              `}
+              onClick={handleCriticize}
+              disabled={busy || !humanizedText.trim()}
+            >
+              {criticLoading ? loader() : 'Criticize'}
+            </button>
+          </div>
+
+          {/* k-iterations control */}
+          <div className="border border-gray-300 rounded-lg px-4 py-3 flex items-center gap-4">
+            <span className="text-sm font-medium text-gray-600 whitespace-nowrap">k:</span>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={kIterations}
+              onChange={(e) => setKIterations(Math.min(20, Math.max(1, parseInt(e.target.value) || 1)))}
+              className="w-16 border border-gray-400 rounded px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-[#333]"
+              disabled={busy}
+            />
+            {score !== null && (
+              <span className="ml-auto text-sm font-mono text-gray-700">
+                AI detection: <span className={score <= 15 ? 'text-green-600 font-semibold' : score <= 40 ? 'text-yellow-600 font-semibold' : 'text-red-600 font-semibold'}>{score}%</span>
+              </span>
+            )}
           </div>
         </div>
+
       </div>
     </div>
   );

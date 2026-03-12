@@ -319,19 +319,20 @@ Now score the text below using ALL 15 criteria (including S14 TECHNICAL LANGUAGE
 async function callLLM(
     messages: Array<{ role: string; content: string }>,
     maxTokens = 4096,
-    model = HUMANIZER_MODEL
+    model = HUMANIZER_MODEL,
+    temperature?: number
 ): Promise<string> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payload: Record<string, any> = { model, messages, max_completion_tokens: maxTokens };
+    if (temperature !== undefined) payload.temperature = temperature;
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-            model,
-            messages,
-            max_completion_tokens: maxTokens,
-        }),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -344,7 +345,7 @@ async function callLLM(
     return data.choices[0]?.message?.content || "";
 }
 
-async function humanize(text: string, k: number, feedback?: string, breakthrough = false): Promise<string> {
+async function humanize(text: string, k: number, feedback?: string, breakthrough = false, temperature?: number): Promise<string> {
     let userContent: string;
 
     if (breakthrough) {
@@ -380,13 +381,15 @@ async function humanize(text: string, k: number, feedback?: string, breakthrough
         userContent = `[TURN k=${k}] Rewrite the following text to sound natural and human:\n\n${text}`;
     }
 
-    // Use higher temperature for breakthrough attempts to force more variation
     return callLLM(
         [
             { role: "system", content: systemPrompt },
             ...writingSamples,
             { role: "user", content: userContent },
-        ]
+        ],
+        4096,
+        HUMANIZER_MODEL,
+        temperature
     );
 }
 
@@ -433,18 +436,29 @@ async function detectAI(text: string): Promise<{ score: number; feedback: string
 
 export async function POST(request: Request) {
     console.log("=====================================");
-    console.log("POST /api/humanaize — multi-agent loop started");
 
     try {
-        const { aiText } = await request.json();
-        console.log(`[INPUT] ${aiText.trim().split(/\s+/).length} words received`);
+        const body = await request.json();
+        const { mode, aiText, humanizedText, kIterations, temperature } = body;
 
+        // ── MODE: humanize ── single humanizer pass ──────────────────────────
+        if (mode === 'humanize') {
+            console.log("POST /api/humanaize — humanize mode");
+            console.log(`[INPUT] ${String(aiText).trim().split(/\s+/).length} words | temperature=${temperature ?? 'default'}`);
+            const result = await humanize(aiText, 1, undefined, false, temperature);
+            return NextResponse.json({ message: result });
+        }
+
+        // ── MODE: refine ── critic-feedback loop ─────────────────────────────
+        console.log("POST /api/humanaize — refine mode");
+
+        const MAX_K = Math.min(Math.max(1, Number(kIterations) || 3), 20);
         const MAX_RETRIES_PER_K = 3;
-        const PLATEAU_THRESHOLD = 2; // consecutive k values with no bestScore improvement → breakthrough
-        const MAX_K = 10;            // hard cap to prevent runaway loops
+        const PLATEAU_THRESHOLD = 2;
 
-        let currentText = aiText;
-        let bestText = aiText;
+        const startText = String(humanizedText);
+        let currentText = startText;
+        let bestText = startText;
         let bestScore = 100;
         let prevScore = 100;
         let lastFeedback: string | undefined;
@@ -456,7 +470,7 @@ export async function POST(request: Request) {
 
             const isBreakthrough = noImprovementStreak >= PLATEAU_THRESHOLD;
             if (isBreakthrough) {
-                console.log(`[k=${k}] ⚡ PLATEAU DETECTED (${noImprovementStreak} turns without improvement) — switching to BREAKTHROUGH mode`);
+                console.log(`[k=${k}] ⚡ PLATEAU DETECTED (${noImprovementStreak} turns) — BREAKTHROUGH mode`);
             }
 
             let humanized = '';
@@ -464,29 +478,28 @@ export async function POST(request: Request) {
             let feedback = '';
 
             for (let retry = 0; retry <= MAX_RETRIES_PER_K; retry++) {
-                // Breakthrough: restart from original text to escape local minimum
-                const inputText = isBreakthrough ? aiText : (retry === 0 ? currentText : bestText);
+                const inputText = isBreakthrough ? startText : (retry === 0 ? currentText : bestText);
 
                 if (retry > 0) {
-                    console.log(`[k=${k}] ↺ Regression (${score}% > ${prevScore}%) — restarting k=${k}, retry ${retry}/${MAX_RETRIES_PER_K}`);
+                    console.log(`[k=${k}] ↺ Regression (${score}% > ${prevScore}%) — retry ${retry}/${MAX_RETRIES_PER_K}`);
                 }
 
                 console.log(`[k=${k}] HUMANIZER → rewriting${isBreakthrough ? " [BREAKTHROUGH]" : lastFeedback ? " with critic feedback" : ""}...`);
                 humanized = await humanize(inputText, k, lastFeedback, isBreakthrough);
-                console.log(`[k=${k}] HUMANIZER output: ${humanized.trim().split(/\s+/).length} words — "${humanized.slice(0, 120)}..."`);
+                console.log(`[k=${k}] HUMANIZER output: ${humanized.trim().split(/\s+/).length} words`);
 
-                console.log(`[k=${k}] CRITIC    → analyzing...`);
+                console.log(`[k=${k}] CRITIC → analyzing...`);
                 ({ score, feedback } = await detectAI(humanized));
-                console.log(`[k=${k}] CRITIC    score : ${score}% (prev: ${prevScore}%)`);
-                console.log(`[k=${k}] CRITIC    issues: ${feedback}`);
+                console.log(`[k=${k}] CRITIC score: ${score}% (prev: ${prevScore}%)`);
+                console.log(`[k=${k}] CRITIC issues: ${feedback}`);
 
                 if (score <= prevScore) {
-                    console.log(`[k=${k}] ✓ Score improved or held — accepting`);
+                    console.log(`[k=${k}] ✓ Accepted`);
                     break;
                 }
 
                 if (retry === MAX_RETRIES_PER_K) {
-                    console.log(`[k=${k}] All retries exhausted — reverting to best text (score=${bestScore}%)`);
+                    console.log(`[k=${k}] All retries exhausted — reverting to best (score=${bestScore}%)`);
                     humanized = bestText;
                     score = bestScore;
                     feedback = lastFeedback ?? '';
@@ -500,7 +513,7 @@ export async function POST(request: Request) {
                 bestText = humanized;
                 bestScore = score;
                 noImprovementStreak = 0;
-                console.log(`[k=${k}] ★ New best score: ${bestScore}%`);
+                console.log(`[k=${k}] ★ New best: ${bestScore}%`);
             } else {
                 noImprovementStreak++;
                 console.log(`[k=${k}] No improvement — streak: ${noImprovementStreak}/${PLATEAU_THRESHOLD}`);
@@ -512,13 +525,12 @@ export async function POST(request: Request) {
             }
 
             if (k === MAX_K) {
-                console.log(`\n[DONE] Max iterations (${MAX_K}) reached — returning best result (score=${bestScore}%)`);
+                console.log(`\n[DONE] Max k=${MAX_K} reached — best score=${bestScore}%`);
                 currentText = bestText;
                 finalScore = bestScore;
                 break;
             }
 
-            console.log(`[k=${k}] Score ${score}% > ${TARGET_SCORE}% — continuing to k=${k + 1}`);
             prevScore = score;
             lastFeedback = feedback;
         }
